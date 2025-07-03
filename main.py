@@ -160,7 +160,7 @@ class BWMonitor(Star):
 
     def get_ctx_key(self, event: AstrMessageEvent) -> Tuple[str, str]:
         """根据事件判断是群聊还是私聊"""
-        if event.is_group_message():
+        if event.is_group_event:
             return ("group", str(event.get_group_id()))
         else:
             return ("user", str(event.get_user_id()))
