@@ -1,5 +1,5 @@
 name: astrbot_plugin_bw_monitor # 这是你的插件的唯一识别名。
 desc: bw余票监控插件。 # 插件简短描述
 version: v1.0
-author: satori # 作者
+author: satori5555 # 作者
 repo: https://github.com/satori5555/astrbot_plugin_bw_monitor # 插件的仓库地址
