@@ -2,15 +2,12 @@ import asyncio
 import json
 import os
 from typing import Dict, Tuple, Optional, List
-import requests
+import aiohttp
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register
 import astrbot.api.message_components as Comp
-
-# 禁用 SSL 警告
-import urllib3
-urllib3.disable_warnings()
+import html
 
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 
@@ -36,9 +33,12 @@ class Main(Star):
         self.load_settings()
 
     def save_settings(self):
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
-        logger.info("[BWMonitor] 已写入 settings.json")
+        try:
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+            logger.info("[BWMonitor] 已写入 settings.json")
+        except Exception as e:
+            logger.error(f"[BWMonitor] 写入 settings.json 失败: {e}")
 
     def load_settings(self):
         if not os.path.exists(SETTINGS_FILE):
@@ -57,7 +57,7 @@ class Main(Star):
             self.data = {}
 
     def get_chat_key(self, event: AstrMessageEvent) -> str:
-        logger.info(f"[DEBUG] unified_msg_origin = {event.unified_msg_origin}")
+        logger.debug(f"[DEBUG] unified_msg_origin = {event.unified_msg_origin}")
         return event.unified_msg_origin or "user:unknown"
 
     def ensure_chat(self, chat_key: str):
@@ -182,43 +182,60 @@ class Main(Star):
     async def run_monitor_loop(self):
         while self.monitoring:
             try:
+                tasks = []
                 for chat_key, cfg in self.data.items():
                     if not cfg.get("switch", False):
                         continue
                     for pid in cfg.get("projects", []):
-                        await self.check_project(pid, chat_key)
+                        tasks.append(self.check_project(pid, chat_key))
+
+                if tasks:
+                    await asyncio.gather(*tasks)
             except Exception as e:
                 logger.warning(f"[BWMonitor] 轮询异常: {e}")
+
             await asyncio.sleep(REFRESH_INTERVAL)
 
     async def check_project(self, pid: str, chat_key: str):
-        name, tickets = self.advanced_project_query(pid)
+        name, tickets = await self.advanced_project_query(pid)
         if not tickets:
             return
 
         if chat_key not in self.last_data:
             self.last_data[chat_key] = {}
 
-        last_tickets = self.last_data[chat_key].get(pid)
-        if last_tickets is None:
+        last_tickets = self.last_data[chat_key].get(pid, [])
+
+        last_map = {desc: sale_flag for desc, sale_flag in last_tickets}
+
+        changes = []
+        for item in tickets:
+            desc, sale_flag = item
+            last_flag = last_map.get(desc)
+            if last_flag is None:
+                changes.append(f"[新增] {desc} - {sale_flag}")
+            elif sale_flag != last_flag:
+                changes.append(f"[变动] {desc} - {last_flag} → {sale_flag}")
+
+        if last_tickets == []:
             text = self.format_tickets(name, tickets)
-            self.send_message(chat_key, text)
-        elif tickets != last_tickets:
-            text = self.format_tickets(name, tickets)
-            self.send_message(chat_key, text)
+            await self.send_message(chat_key, text)
+        elif changes:
+            text = f"🎫 项目名称：{name}\n" + "\n".join(changes)
+            await self.send_message(chat_key, text)
 
         self.last_data[chat_key][pid] = tickets
 
     async def query_and_push_once(self, pid: str, chat_key: str):
-        name, tickets = self.advanced_project_query(pid)
+        name, tickets = await self.advanced_project_query(pid)
         if not tickets:
-            self.send_message(chat_key, f"项目 {pid} 未获取到票务数据。")
+            await self.send_message(chat_key, f"项目 {pid} 未获取到票务数据。")
             return
 
         text = self.format_tickets(name, tickets)
-        self.send_message(chat_key, text)
+        await self.send_message(chat_key, text)
 
-    def advanced_project_query(self, project_id: str) -> Tuple[str, List[List[str]]]:
+    async def advanced_project_query(self, project_id: str) -> Tuple[str, List[List[str]]]:
         tickets = []
         SALE_STATUS_MAP = {
             1: "未开售",
@@ -232,7 +249,7 @@ class Main(Star):
         }
 
         url = f"https://show.bilibili.com/api/ticket/project/getV2?version=134&id={project_id}"
-        resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, verify=False).json()
+        resp = await self.fetch_json(url)
         if resp.get("code") != 0:
             return f"项目 {project_id}", []
 
@@ -240,14 +257,14 @@ class Main(Star):
         project_name = data.get("name", f"项目 {project_id}")
 
         changfan_url = f"https://show.bilibili.com/api/ticket/linkgoods/list?project_id={project_id}&page_type=0"
-        changfan_resp = requests.get(changfan_url, headers=HEADERS, timeout=TIMEOUT, verify=False).json()
+        changfan_resp = await self.fetch_json(changfan_url)
 
         if changfan_resp.get("code") == 0 and changfan_resp["data"]["total"] > 0:
             for linkgood in changfan_resp["data"]["list"]:
                 linkgood_id = linkgood["id"]
 
                 detail_url = f"https://show.bilibili.com/api/ticket/linkgoods/detail?link_id={linkgood_id}"
-                detail_resp = requests.get(detail_url, headers=HEADERS, timeout=TIMEOUT, verify=False).json()
+                detail_resp = await self.fetch_json(detail_url)
                 if detail_resp.get("code") != 0:
                     continue
 
@@ -255,7 +272,7 @@ class Main(Star):
                 for screen in screens:
                     screen_name = screen["name"]
                     for sku in screen["ticket_list"]:
-                        desc = sku["desc"]
+                        desc = html.unescape(sku["desc"])
                         sale_flag = SALE_STATUS_MAP.get(sku["sale_flag_number"], "未知状态")
                         price = sku["price"] / 100
                         tickets.append([f"{screen_name} {desc} ¥{price}", sale_flag])
@@ -266,7 +283,7 @@ class Main(Star):
                 for sales_date in sales_dates:
                     date_str = sales_date["date"]
                     info_url = f"https://show.bilibili.com/api/ticket/project/infoByDate?id={project_id}&date={date_str}"
-                    info_resp = requests.get(info_url, headers=HEADERS, timeout=TIMEOUT, verify=False).json()
+                    info_resp = await self.fetch_json(info_url)
                     if info_resp.get("code") != 0:
                         continue
 
@@ -274,7 +291,7 @@ class Main(Star):
                     for screen in screens:
                         screen_name = screen["name"]
                         for sku in screen["ticket_list"]:
-                            desc = sku["desc"]
+                            desc = html.unescape(sku["desc"])
                             sale_flag = SALE_STATUS_MAP.get(sku["sale_flag_number"], "未知状态")
                             price = sku["price"] / 100
                             tickets.append([f"{date_str} {screen_name} {desc} ¥{price}", sale_flag])
@@ -283,12 +300,18 @@ class Main(Star):
                 for screen in screens:
                     screen_name = screen.get("name", "")
                     for sku in screen.get("ticket_list", []):
-                        desc = sku.get("desc", "")
+                        desc = html.unescape(sku.get("desc", ""))
                         sale_flag = SALE_STATUS_MAP.get(sku.get("sale_flag_number", 0), "未知状态")
                         price = sku.get("price", 0) / 100
                         tickets.append([f"{screen_name} {desc} ¥{price}", sale_flag])
 
         return project_name, tickets
+
+    async def fetch_json(self, url: str) -> dict:
+        connector = aiohttp.TCPConnector(verify_ssl=False)
+        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=TIMEOUT)) as session:
+            async with session.get(url, headers=HEADERS) as response:
+                return await response.json()
 
     def format_tickets(self, name: str, tickets: List[List[str]]) -> str:
         result = f"🎫 项目名称：{name}\n"
@@ -296,19 +319,15 @@ class Main(Star):
             result += f"{item[0]} - {item[1]}\n"
         return result.strip()
 
-    def send_message(self, chat_key: str, text: str):
+    async def send_message(self, chat_key: str, text: str):
         session_id = self.session_id_map.get(chat_key)
         if not session_id:
             logger.warning(f"找不到 session_id，无法发送：{chat_key}")
             return
 
         message_chain = MessageChain([Comp.Plain(text)])
-        future = asyncio.run_coroutine_threadsafe(
-            self.context.send_message(session_id, message_chain),
-            asyncio.get_event_loop()
-        )
         try:
-            future.result(timeout=10)
+            await self.context.send_message(session_id, message_chain)
         except Exception as e:
             logger.error(f"发送消息到 {session_id} 失败：{e}")
 
