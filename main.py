@@ -17,7 +17,7 @@ HEADERS = {
 }
 
 
-@register("bw_monitor", "YourName", "BW余票监控插件", "1.0.0")
+@register("astrbot_plugin_bw_monitor", "YourName", "BW余票监控插件", "1.0.0")
 class BWMonitor(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -154,14 +154,11 @@ class BWMonitor(Star):
             logger.warning(f"找不到 session_id，无法发送：{ctx_key}")
             return
 
-        # 构造消息链
         message_chain = MessageChain([Comp.Plain(text)])
-        # 在线程里调用协程，需要 run_coroutine_threadsafe
         future = asyncio.run_coroutine_threadsafe(
             self.context.send_message(session_id, message_chain),
             self.loop
         )
-        # 可选：等待发送完成
         try:
             future.result(timeout=10)
         except Exception as e:
