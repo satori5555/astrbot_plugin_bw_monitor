@@ -1,25 +1,21 @@
 import time
 import threading
+import requests
+import asyncio
 from datetime import datetime
 from typing import Dict, Tuple, Optional, List
-import requests
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
+from astrbot.api.star import Context, Star, register
+import astrbot.api.message_components as Comp
 
-# ==================================
-# 配置区
-# ==================================
-
+# 配置
 REFRESH_INTERVAL = 30      # 轮询间隔秒数
 TIMEOUT = 10               # 请求超时
 HEADERS = {
     "User-Agent": "Mozilla/5.0"
 }
 
-# ==================================
-# 主插件类
-# ==================================
 
 @register("bw_monitor", "YourName", "BW余票监控插件", "1.0.0")
 class BWMonitor(Star):
@@ -28,6 +24,8 @@ class BWMonitor(Star):
         self.monitor_switch: Dict[Tuple[str, str], bool] = {}  # (type, id) -> on/off
         self.monitor_projects: Dict[Tuple[str, str], set] = {} # (type, id) -> set of project ids
         self.last_status: Dict[str, Dict[Tuple[str, str], str]] = {} # pid -> {(sid, tid): status}
+        self.session_id_map: Dict[Tuple[str, str], str] = {}  # (type, id) -> session_id
+        self.loop = context.loop  # 主事件循环
         self.monitor_thread = threading.Thread(target=self.run_monitor_loop, daemon=True)
         self.monitor_thread.start()
 
@@ -44,6 +42,8 @@ class BWMonitor(Star):
     async def bw_on(self, event: AstrMessageEvent):
         key = self.get_ctx_key(event)
         self.monitor_switch[key] = True
+        session_id = event.unified_msg_origin
+        self.session_id_map[key] = session_id
         yield event.plain_result("✅ 已开启 BW 余票监控。")
 
     # ----------------------------
@@ -129,18 +129,16 @@ class BWMonitor(Star):
             return
 
         # 解析票种
-        new_status = {}
         for session in data.get("session_list", []):
             sid = str(session.get("session_id"))
             for ticket in session.get("ticket_list", []):
                 tid = str(ticket.get("ticket_id"))
                 name = ticket.get("desc", "")
                 status = ticket.get("sale_flag", {}).get("display_name", "")
-                new_status[(sid, tid)] = (name, status)
+                key_tuple = (sid, tid)
 
-                old_status = self.last_status.setdefault(pid, {}).get((sid, tid))
+                old_status = self.last_status.setdefault(pid, {}).get(key_tuple)
                 if old_status is not None and old_status != status:
-                    # 发生变化
                     dt = datetime.now()
                     date_str = dt.strftime("%Y-%m-%d")
                     weekday = "日一二三四五六"[dt.weekday()]
@@ -148,15 +146,26 @@ class BWMonitor(Star):
                     self.send_message(ctx_key, msg)
 
                 # 更新状态
-                self.last_status[pid][(sid, tid)] = status
+                self.last_status[pid][key_tuple] = status
 
     def send_message(self, ctx_key: Tuple[str, str], text: str):
-        """向群或私聊发送消息"""
-        target_type, target_id = ctx_key
-        if target_type == "group":
-            self.context.push_group_message(int(target_id), text)
-        elif target_type == "user":
-            self.context.push_private_message(int(target_id), text)
+        session_id = self.session_id_map.get(ctx_key)
+        if not session_id:
+            logger.warning(f"找不到 session_id，无法发送：{ctx_key}")
+            return
+
+        # 构造消息链
+        message_chain = MessageChain([Comp.Plain(text)])
+        # 在线程里调用协程，需要 run_coroutine_threadsafe
+        future = asyncio.run_coroutine_threadsafe(
+            self.context.send_message(session_id, message_chain),
+            self.loop
+        )
+        # 可选：等待发送完成
+        try:
+            future.result(timeout=10)
+        except Exception as e:
+            logger.error(f"发送消息到 {session_id} 失败：{e}")
 
     def get_ctx_key(self, event: AstrMessageEvent) -> Tuple[str, str]:
         """根据事件判断是群聊还是私聊"""
