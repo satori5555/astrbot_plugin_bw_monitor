@@ -1,0 +1,20 @@
+{
+  "refresh_interval": {
+    "description": "轮询间隔秒数，最小值为 1。",
+    "type": "int",
+    "default": 3,
+    "hint": "例如：3 表示每 3 秒检测一次票务信息。"
+  },
+  "default_enabled_sessions": {
+    "description": "默认启用监控的会话 ID 列表（unified_msg_origin）。",
+    "type": "list",
+    "default": [],
+    "hint": "例如：[\"aiocqhttp:GroupMessage:123456789\"]"
+  },
+  "admin_enabled": {
+    "description": "是否启用管理员权限限制。如果为 true，则只有管理员可以操作插件命令。",
+    "type": "bool",
+    "default": false,
+    "hint": "true 或 false"
+  }
+}

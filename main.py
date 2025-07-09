@@ -11,7 +11,6 @@ import html
 
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 
-REFRESH_INTERVAL = 1
 TIMEOUT = 50
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 "
@@ -21,8 +20,13 @@ HEADERS = {
 
 @register("astrbot_plugin_bw_monitor", "YourName", "BW余票监控插件", "2.0.0")
 class Main(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config: dict):
         super().__init__(context)
+
+        # 从 config dict 读取
+        self.refresh_interval = config.get("refresh_interval", 3)
+        self.admin_enabled = config.get("admin_enabled", False)
+        self.default_enabled_sessions = config.get("default_enabled_sessions", [])
 
         self.data = {}  # chat_key -> { switch, projects }
         self.last_data: Dict[str, Dict[str, List[List[str]]]] = {}
@@ -42,10 +46,16 @@ class Main(Star):
 
     def load_settings(self):
         if not os.path.exists(SETTINGS_FILE):
-            logger.info("[BWMonitor] settings.json 不存在，已创建空文件。")
-            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump({}, f, ensure_ascii=False, indent=2)
+            logger.info("[BWMonitor] settings.json 不存在，自动生成默认配置。")
+
             self.data = {}
+            for sess in self.default_enabled_sessions:
+                self.data[sess] = {
+                    "switch": True,
+                    "projects": []
+                }
+            with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
             return
 
         try:
@@ -77,6 +87,10 @@ class Main(Star):
 
     @filter.command("bw on")
     async def bw_on(self, event: AstrMessageEvent):
+        if self.admin_enabled and not event.is_admin:
+            yield event.plain_result("⛔ 权限不足，仅管理员可执行该命令。")
+            return
+
         chat_key = self.get_chat_key(event)
         self.ensure_chat(chat_key)
 
@@ -92,6 +106,10 @@ class Main(Star):
 
     @filter.command("bw off")
     async def bw_off(self, event: AstrMessageEvent):
+        if self.admin_enabled and not event.is_admin:
+            yield event.plain_result("⛔ 权限不足，仅管理员可执行该命令。")
+            return
+
         chat_key = self.get_chat_key(event)
         self.ensure_chat(chat_key)
 
@@ -101,6 +119,10 @@ class Main(Star):
 
     @filter.command("bw add")
     async def bw_add(self, event: AstrMessageEvent):
+        if self.admin_enabled and not event.is_admin:
+            yield event.plain_result("⛔ 权限不足，仅管理员可执行该命令。")
+            return
+
         chat_key = self.get_chat_key(event)
         self.ensure_chat(chat_key)
 
@@ -124,6 +146,10 @@ class Main(Star):
 
     @filter.command("bw rm")
     async def bw_rm(self, event: AstrMessageEvent):
+        if self.admin_enabled and not event.is_admin:
+            yield event.plain_result("⛔ 权限不足，仅管理员可执行该命令。")
+            return
+
         chat_key = self.get_chat_key(event)
         self.ensure_chat(chat_key)
 
@@ -194,7 +220,7 @@ class Main(Star):
             except Exception as e:
                 logger.warning(f"[BWMonitor] 轮询异常: {e}")
 
-            await asyncio.sleep(REFRESH_INTERVAL)
+            await asyncio.sleep(self.refresh_interval)
 
     async def check_project(self, pid: str, chat_key: str):
         name, tickets = await self.advanced_project_query(pid)
@@ -205,7 +231,6 @@ class Main(Star):
             self.last_data[chat_key] = {}
 
         last_tickets = self.last_data[chat_key].get(pid, [])
-
         last_map = {desc: sale_flag for desc, sale_flag in last_tickets}
 
         changes = []
@@ -276,7 +301,6 @@ class Main(Star):
                         sale_flag = SALE_STATUS_MAP.get(sku["sale_flag_number"], "未知状态")
                         price = sku["price"] / 100
                         tickets.append([f"{screen_name} {desc} ¥{price}", sale_flag])
-
         else:
             sales_dates = data.get("sales_dates", [])
             if sales_dates:
