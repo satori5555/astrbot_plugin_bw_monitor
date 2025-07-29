@@ -1,3 +1,5 @@
+[![Star History Chart](https://api.star-history.com/svg?repos=wujiawei1207537021/wu-lazy-cloud-network&type=Date)](https://star-history.com/#wujiawei1207537021/wu-lazy-cloud-network&Date)
+
 # 🚀 astrbot_plugin_bw_monitor
 
 > Bilibili Show 票务监控插件，实时推送项目余票变化。  
