@@ -1,4 +1,4 @@
-[![Star History Chart](https://api.star-history.com/svg?repos=wujiawei1207537021/wu-lazy-cloud-network&type=Date)](https://star-history.com/#wujiawei1207537021/wu-lazy-cloud-network&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=wujiawei1207537021/wu-lazy-cloud-network&type=Date)](stars)
 
 # 🚀 astrbot_plugin_bw_monitor
 
