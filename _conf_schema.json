@@ -3,7 +3,7 @@
     "description": "轮询间隔秒数，最小值为 1。",
     "type": "int",
     "default": 3,
-    "hint": "例如：3 表示每 3 秒检测一次票务信息。"
+    "hint": "例如：3 表示所有监控项目共用同一个 3 秒间隔，每 3 秒只轮询一个去重后的项目。"
   },
   "default_enabled_sessions": {
     "description": "默认启用监控的会话 ID 列表（unified_msg_origin）。",
